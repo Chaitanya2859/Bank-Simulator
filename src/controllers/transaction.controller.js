@@ -56,27 +56,51 @@ async function createTransaction(req, res) {
         }
     }
 
-    // 3. Check account status
-    if (senderAccount.status !== "ACTIVE" || receiverAccount.status !== "ACTIVE") {
-        return res.status(400).json({
-            message: "Both fromAccount and toAccount must be ACTIVE to process transaction"
-        })
-    }
-
-    // 4. Derive sender balance from ledger
-    const currentBalance = await senderAccount.getBalance()
-
-    if (currentBalance < amount) {
-        return res.status(400).json({
-            message: `Insufficient balance. Current balance is ${currentBalance}. Requested amount is ${amount}`
-        })
-    }
+    const session = await mongoose.startSession()
+    session.startTransaction()
 
     let transaction
 
     try {
-        const session = await mongoose.startSession()
-        session.startTransaction()
+        // 3. Acquire a write lock on the sender account by updating a timestamp to prevent race conditions
+        const senderAccountLocked = await accountModel.findOneAndUpdate(
+            { _id: fromAccount, status: "ACTIVE" },
+            { $set: { updatedAt: new Date() } },
+            { session, new: true }
+        )
+
+        if (!senderAccountLocked) {
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(400).json({
+                message: "Sender account is invalid or not ACTIVE"
+            })
+        }
+
+        // Verify receiver account is ACTIVE under the session
+        const receiverAccountLocked = await accountModel.findOne({
+            _id: toAccount,
+            status: "ACTIVE"
+        }).session(session)
+
+        if (!receiverAccountLocked) {
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(400).json({
+                message: "Receiver account is invalid or not ACTIVE"
+            })
+        }
+
+        // 4. Derive sender balance from ledger under the transaction session
+        const currentBalance = await senderAccountLocked.getBalance(session)
+
+        if (currentBalance < amount) {
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(400).json({
+                message: `Insufficient balance. Current balance is ${currentBalance}. Requested amount is ${amount}`
+            })
+        }
 
         // 5. Create transaction (PENDING)
         transaction = (
@@ -97,8 +121,6 @@ async function createTransaction(req, res) {
             type: "DEBIT"
         }], { session })
 
-        await new Promise(resolve => setTimeout(resolve, 15 * 1000))
-
         // 7. Create CREDIT ledger entry
         await ledgerModel.create([{
             account: toAccount,
@@ -108,28 +130,72 @@ async function createTransaction(req, res) {
         }], { session })
 
         // 8. Mark transaction COMPLETED
-        await transactionModel.findOneAndUpdate(
+        transaction = await transactionModel.findOneAndUpdate(
             { _id: transaction._id },
             { status: "COMPLETED" },
-            { session }
+            { session, new: true }
         )
 
         // 9. Commit MongoDB session
         await session.commitTransaction()
         session.endSession()
     } catch (error) {
+        if (session.inTransaction()) {
+            await session.abortTransaction()
+        }
+        session.endSession()
+
+        // Create or update transaction record to FAILED state outside the transaction session
+        let failedTransaction
+        try {
+            if (transaction && transaction._id) {
+                failedTransaction = await transactionModel.findByIdAndUpdate(
+                    transaction._id,
+                    { status: "FAILED" },
+                    { new: true }
+                )
+            } else {
+                failedTransaction = await transactionModel.create({
+                    fromAccount,
+                    toAccount,
+                    amount,
+                    idempotencyKey,
+                    status: "FAILED"
+                })
+            }
+        } catch (dbError) {
+            console.error("Failed to save failed transaction state:", dbError)
+        }
+
+        // Send email notification of failure
+        try {
+            await emailService.sendTransactionFailureEmail(
+                req.user.email,
+                req.user.name,
+                amount,
+                toAccount
+            )
+        } catch (emailError) {
+            console.error("Failed to send transaction failure email:", emailError)
+        }
+
         return res.status(400).json({
-            message: "Transaction is Pending due to some issue, please retry after sometime"
+            message: "Transaction failed. Please retry after some time.",
+            transaction: failedTransaction
         })
     }
 
     // 10. Send email notification
-    await emailService.sendTransactionEmail(
-        req.user.email,
-        req.user.name,
-        amount,
-        toAccount
-    )
+    try {
+        await emailService.sendTransactionEmail(
+            req.user.email,
+            req.user.name,
+            amount,
+            toAccount
+        )
+    } catch (emailError) {
+        console.error("Failed to send transaction success email:", emailError)
+    }
 
     return res.status(201).json({
         message: "Transaction completed successfully",
@@ -154,51 +220,79 @@ async function createInitialFundsTransaction(req, res) {
         })
     }
 
-    const systemAccount = await accountModel.findOne({
-        user: req.user._id
+    const existingTransaction = await transactionModel.findOne({
+        idempotencyKey
     })
 
-    if (!systemAccount) {
-        return res.status(400).json({
-            message: "System user account not found"
-        })
+    if (existingTransaction) {
+        if (existingTransaction.status === "COMPLETED") {
+            return res.status(200).json({
+                message: "Transaction already processed",
+                transaction: existingTransaction
+            })
+        }
     }
 
     const session = await mongoose.startSession()
     session.startTransaction()
 
-    const transaction = new transactionModel({
-        fromAccount: systemAccount._id,
-        toAccount,
-        amount,
-        idempotencyKey,
-        status: "PENDING"
-    })
+    try {
+        let systemAccount = await accountModel.findOne({
+            user: req.user._id
+        }).session(session)
 
-    await ledgerModel.create([{
-        account: systemAccount._id,
-        amount,
-        transaction: transaction._id,
-        type: "DEBIT"
-    }], { session })
+        // Automatically create system account if it doesn't exist yet
+        if (!systemAccount) {
+            systemAccount = (await accountModel.create([{
+                user: req.user._id,
+                currency: "INR",
+                status: "ACTIVE"
+            }], { session }))[0]
+        }
 
-    await ledgerModel.create([{
-        account: toAccount,
-        amount,
-        transaction: transaction._id,
-        type: "CREDIT"
-    }], { session })
+        const transaction = new transactionModel({
+            fromAccount: systemAccount._id,
+            toAccount,
+            amount,
+            idempotencyKey,
+            status: "PENDING"
+        })
 
-    transaction.status = "COMPLETED"
-    await transaction.save({ session })
+        await ledgerModel.create([{
+            account: systemAccount._id,
+            amount,
+            transaction: transaction._id,
+            type: "DEBIT"
+        }], { session })
 
-    await session.commitTransaction()
-    session.endSession()
+        await ledgerModel.create([{
+            account: toAccount,
+            amount,
+            transaction: transaction._id,
+            type: "CREDIT"
+        }], { session })
 
-    return res.status(201).json({
-        message: "Initial funds transaction completed successfully",
-        transaction
-    })
+        transaction.status = "COMPLETED"
+        await transaction.save({ session })
+
+        await session.commitTransaction()
+        session.endSession()
+
+        return res.status(201).json({
+            message: "Initial funds transaction completed successfully",
+            transaction
+        })
+    } catch (error) {
+        if (session.inTransaction()) {
+            await session.abortTransaction()
+        }
+        session.endSession()
+
+        return res.status(400).json({
+            message: "Failed to process initial funds transaction.",
+            error: error.message
+        })
+    }
 }
 
 module.exports = {
