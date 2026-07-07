@@ -5,5 +5,5 @@ const jwt = require("jsonwebtoken")
 
 router.post("/register", authController.userRegisterController)
 router.post("/login",authController.userLoginController)
-//router.post("/logout", authController.userLogoutController)
+router.post("/logout", authController.userLogoutController)
 module.exports = router

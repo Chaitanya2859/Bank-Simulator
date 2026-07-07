@@ -1,4 +1,6 @@
-const mongoose = require("mongoose");
+const mongoose = require("mongoose")
+
+const ledgerModel = require("./ledger.model")
 
 const accountSchema = new mongoose.Schema({
     user: {
@@ -22,12 +24,15 @@ const accountSchema = new mongoose.Schema({
     }
 }, {
     timestamps: true
-});
+})
 
-accountSchema.index({ user: 1, status: 1 });
+accountSchema.index({
+    user: 1,
+    status: 1
+})
 
 accountSchema.methods.getBalance = async function () {
-    const accountBalance = await ledgerModel.aggregate([
+    const balanceData = await ledgerModel.aggregate([
         {
             $match: {
                 account: this._id
@@ -56,15 +61,15 @@ accountSchema.methods.getBalance = async function () {
                 }
             }
         }
-    ]);
+    ])
 
-    if (accountBalance.length === 0) {
-        return 0;
+    if (balanceData.length === 0) {
+        return 0
     }
 
-    return accountBalance[0].balance;
-};
+    return balanceData[0].balance
+}
 
-const accountModel = mongoose.model("account", accountSchema);
+const accountModel = mongoose.model("account", accountSchema)
 
-module.exports = accountModel;
+module.exports = accountModel
