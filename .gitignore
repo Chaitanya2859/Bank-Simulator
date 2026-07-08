@@ -1,3 +1,5 @@
-/.env
+.env
+.env.*
+!.env.example
 /node_modules
 print_codebase.py
