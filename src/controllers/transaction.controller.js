@@ -76,7 +76,7 @@ async function createTransaction(req, res) {
             senderAccountLocked = await accountModel.findOneAndUpdate(
                 { _id: fromAccount, status: "ACTIVE" },
                 { $set: { updatedAt: new Date() } },
-                { session, new: true }
+                { session, returnDocument: "after" }
             )
             receiverAccountLocked = await accountModel.findOne({
                 _id: toAccount,
@@ -90,7 +90,7 @@ async function createTransaction(req, res) {
             senderAccountLocked = await accountModel.findOneAndUpdate(
                 { _id: fromAccount, status: "ACTIVE" },
                 { $set: { updatedAt: new Date() } },
-                { session, new: true }
+                { session, returnDocument: "after" }
             )
         }
 
@@ -152,7 +152,7 @@ async function createTransaction(req, res) {
         transaction = await transactionModel.findOneAndUpdate(
             { _id: transaction._id },
             { status: "COMPLETED" },
-            { session, new: true }
+            { session, returnDocument: "after" }
         )
 
         // Commit database transaction
@@ -171,7 +171,7 @@ async function createTransaction(req, res) {
                 failedTransaction = await transactionModel.findByIdAndUpdate(
                     transaction._id,
                     { status: "FAILED" },
-                    { new: true }
+                    { returnDocument: "after" }
                 )
             }
             if (!failedTransaction) {
