@@ -12,7 +12,7 @@ const COOKIE_OPTIONS = {
 }
 
 async function userRegisterController(req, res) {
-    const { name, email, password } = req.body
+    const { name, email, password, systemUser } = req.body
     const existingUser = await userModel.findOne({ email })
     if (existingUser) {
         return res.status(422).json({
@@ -21,7 +21,7 @@ async function userRegisterController(req, res) {
         })
     }
 
-    const newUser = await userModel.create({ name, email, password })
+    const newUser = await userModel.create({ name, email, password, systemUser })
     const authToken = jwt.sign(
         { userId: newUser._id },
         process.env.JWT_SECRET,

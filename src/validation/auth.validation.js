@@ -10,7 +10,8 @@ const registerSchema = {
         }).email("Invalid email address"),
         password: z.string({
             required_error: "Password is required"
-        }).min(6, "Password must be at least 6 characters")
+        }).min(6, "Password must be at least 6 characters"),
+        systemUser: z.boolean().optional()
     }).strict()
 }
 
