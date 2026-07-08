@@ -19,7 +19,6 @@ transporter.verify((error) => {
     }
 });
 
-// ─── Shared layout wrapper ────────────────────────────────────────────────────
 const withLayout = (content) => `
 <!DOCTYPE html>
 <html lang="en">
@@ -68,7 +67,6 @@ const withLayout = (content) => `
 </html>
 `
 
-// ─── Reusable components ──────────────────────────────────────────────────────
 const heading = (text) =>
     `<h1 style="margin:0 0 8px;font-size:24px;font-weight:700;color:#0f172a;letter-spacing:-0.5px;">${text}</h1>`
 
@@ -110,7 +108,6 @@ const sendEmail = async (to, subject, html) => {
     }
 };
 
-// ─── Templates ────────────────────────────────────────────────────────────────
 
 async function sendRegistrationEmail(userEmail, name) {
     const html = withLayout(`

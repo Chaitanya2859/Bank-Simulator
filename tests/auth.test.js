@@ -3,12 +3,24 @@ const mongoose = require("mongoose")
 const { MongoMemoryReplSet } = require("mongodb-memory-server")
 const app = require("../src/app")
 const userModel = require("../src/models/user.model")
+const tokenBlackListModel = require("../src/models/blackList.model")
 
 // Mock email service to prevent attempting to connect to SMTP
 jest.mock("../src/services/email.service.js", () => ({
-    sendRegistrationEmail: jest.fn().mockResolvedValue(true),
-    sendTransactionEmail: jest.fn().mockResolvedValue(true),
+    sendRegistrationEmail:      jest.fn().mockResolvedValue(true),
+    sendTransactionEmail:       jest.fn().mockResolvedValue(true),
     sendTransactionFailureEmail: jest.fn().mockResolvedValue(true)
+}))
+
+// Mock Redis in-memory storage for tests
+const mockRedisStore = new Map()
+jest.mock("../src/config/redis.js", () => ({
+    get: jest.fn().mockImplementation(async (key) => mockRedisStore.get(key) || null),
+    setEx: jest.fn().mockImplementation(async (key, ttl, value) => {
+        mockRedisStore.set(key, value)
+        return "OK"
+    }),
+    connect: jest.fn().mockResolvedValue(true)
 }))
 
 let mongoServer
@@ -30,6 +42,8 @@ afterAll(async () => {
 
 beforeEach(async () => {
     await userModel.deleteMany({})
+    await tokenBlackListModel.deleteMany({})
+    mockRedisStore.clear()
 })
 
 describe("Authentication API Integration Tests", () => {
@@ -85,6 +99,14 @@ describe("Authentication API Integration Tests", () => {
         expect(res.body.user.email).toBe(testUser.email)
     })
 
+    const parseCookieToken = (res) => {
+        const cookies = res.headers["set-cookie"]
+        if (!cookies) return null
+        const tokenCookie = cookies.find(c => c.startsWith("token="))
+        if (!tokenCookie) return null
+        return tokenCookie.split(";")[0].replace("token=", "")
+    }
+
     test("POST /api/auth/login - Invalid Credentials", async () => {
         await request(app)
             .post("/api/auth/register")
@@ -99,5 +121,30 @@ describe("Authentication API Integration Tests", () => {
 
         expect(res.status).toBe(401)
         expect(res.body.message).toBe("Email or password is INVALID")
+    })
+
+    test("authMiddleware falls back to Mongo when Redis read fails", async () => {
+        const redisClient = require("../src/config/redis")
+        
+        await request(app).post("/api/auth/register").send(testUser)
+        const loginRes = await request(app).post("/api/auth/login").send({
+            email: testUser.email,
+            password: testUser.password
+        })
+        const token = parseCookieToken(loginRes)
+
+        redisClient.setEx.mockRejectedValueOnce(new Error("Redis write failure"))
+        await request(app)
+            .post("/api/auth/logout")
+            .set("Authorization", `Bearer ${token}`)
+            .send()
+
+        redisClient.get.mockRejectedValueOnce(new Error("Redis connection lost"))
+        const res = await request(app)
+            .get("/api/accounts")
+            .set("Authorization", `Bearer ${token}`)
+            .send()
+
+        expect(res.status).toBe(401)
     })
 })

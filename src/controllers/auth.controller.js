@@ -1,13 +1,14 @@
 const jwt = require("jsonwebtoken")
 const userModel = require("../models/user.model")
+const redisClient = require("../config/redis")
 const tokenBlackListModel = require("../models/blackList.model")
 const emailService = require("../services/email.service")
 
 const COOKIE_OPTIONS = {
-    httpOnly: true,                                         // Prevents XSS theft
-    secure: process.env.NODE_ENV === "production",          // Production HTTPS check
-    sameSite: "strict",                                     // Prevents CSRF attacks
-    maxAge: 3 * 24 * 60 * 60 * 1000                        // Three days expiry
+    httpOnly: true,                                         
+    secure: process.env.NODE_ENV === "production",          
+    sameSite: "strict",                                     
+    maxAge: 3*24*60*60*1000 // Three days expiry
 }
 
 async function userRegisterController(req, res) {
@@ -79,7 +80,37 @@ async function userLogoutController(req, res) {
         })
     }
 
-    await tokenBlackListModel.create({ token: authToken })
+    let mongoSuccess = false
+    let redisSuccess = false
+    let alreadyBlacklisted = false
+
+    // Persist to Mongo
+    try {
+        await tokenBlackListModel.create({ token: authToken })
+        mongoSuccess = true
+    } catch (mongoErr) {
+        if (mongoErr.code === 11000) {
+            alreadyBlacklisted = true
+        } else {
+            console.error("Mongo blacklist fail:", mongoErr)
+        }
+    }
+
+    // Save to blacklist
+    try {
+        await redisClient.setEx(`blacklist:${authToken}`, 3 * 24 * 60 * 60, "true")
+        redisSuccess = true
+    } catch (err) {
+        console.error("Redis write failure:", err)
+    }
+
+    // Check complete failure
+    if (!mongoSuccess && !redisSuccess && !alreadyBlacklisted) {
+        return res.status(503).json({
+            message: "Logout failed due to system error"
+        })
+    }
+
     res.clearCookie("token")
     res.status(200).json({
         message: "User logged out successfully"

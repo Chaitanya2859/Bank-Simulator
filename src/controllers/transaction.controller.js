@@ -72,7 +72,7 @@ async function createTransaction(req, res) {
         let receiverAccountLocked
 
         // Prevent transaction deadlocks
-        if (fromAccount < toAccount) {
+        if (String(fromAccount) < String(toAccount)) {
             senderAccountLocked = await accountModel.findOneAndUpdate(
                 { _id: fromAccount, status: "ACTIVE" },
                 { $set: { updatedAt: new Date() } },
@@ -173,7 +173,8 @@ async function createTransaction(req, res) {
                     { status: "FAILED" },
                     { new: true }
                 )
-            } else {
+            }
+            if (!failedTransaction) {
                 failedTransaction = await transactionModel.create({
                     fromAccount,
                     toAccount,

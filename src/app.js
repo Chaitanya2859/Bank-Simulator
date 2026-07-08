@@ -5,12 +5,15 @@ const accountRouter = require("./routes/account.routes")
 const authRouter = require("./routes/auth.routes")
 const transactionRoutes = require("./routes/transaction.route")
 
+const swaggerUi = require("swagger-ui-express")
+const swaggerSpec = require("./config/swagger")
+
 const app = express()
 
 // Global rate limiter
 const globalLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // Fifteen minutes window
-    max: 500, // Five hundred limit
+    windowMs: 15 * 60 * 1000,
+    max: 500,
     standardHeaders: true,
     legacyHeaders: false,
 })
@@ -34,6 +37,9 @@ app.use(cookieParser())
 app.get("/", (req, res) => {
     res.send("LedgerFlow API is up and running")
 })
+
+// API Documentation route
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec))
 
 app.use("/api/auth", authLimiter, authRouter)
 app.use("/api/accounts", accountRouter)
