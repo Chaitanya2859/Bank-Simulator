@@ -3,6 +3,13 @@ const userModel = require("../models/user.model")
 const tokenBlackListModel = require("../models/blackList.model")
 const emailService = require("../services/email.service")
 
+const COOKIE_OPTIONS = {
+    httpOnly: true,                                         // Prevents XSS theft
+    secure: process.env.NODE_ENV === "production",          // Production HTTPS check
+    sameSite: "strict",                                     // Prevents CSRF attacks
+    maxAge: 3 * 24 * 60 * 60 * 1000                        // Three days expiry
+}
+
 async function userRegisterController(req, res) {
     const { name, email, password } = req.body
     const existingUser = await userModel.findOne({ email })
@@ -20,14 +27,13 @@ async function userRegisterController(req, res) {
         { expiresIn: "3d" }
     )
 
-    res.cookie("token", authToken)
+    res.cookie("token", authToken, COOKIE_OPTIONS)
     res.status(201).json({
         user: {
             _id: newUser._id,
             name: newUser.name,
             email: newUser.email
-        },
-        token: authToken
+        }
     })
 
     await emailService.sendRegistrationEmail(newUser.email, newUser.name)
@@ -55,14 +61,13 @@ async function userLoginController(req, res) {
         process.env.JWT_SECRET,
         { expiresIn: "3d" }
     )
-    res.cookie("token", authToken)
+    res.cookie("token", authToken, COOKIE_OPTIONS)
     res.status(200).json({
         user: {
             _id: existingUser._id,
             name: existingUser.name,
             email: existingUser.email
-        },
-        token: authToken
+        }
     })
 }
 

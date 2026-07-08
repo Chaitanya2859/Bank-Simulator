@@ -6,25 +6,31 @@ const transactionModel = require("../models/transaction.model")
 const emailService = require("../services/email.service")
 
 async function createTransaction(req, res) {
-    // 1. Validate request
+    // Validate request payload
     const { fromAccount, toAccount, amount, idempotencyKey } = req.body
 
     if (!fromAccount || !toAccount || !amount || !idempotencyKey) {
         return res.status(400).json({
-            message: "FromAccount, toAccount, amount and idempotencyKey are required"
+            message: "fromAccount, toAccount, amount and idempotencyKey are required"
         })
     }
 
-    const senderAccount = await accountModel.findOne({ _id: fromAccount })
+    if (fromAccount === toAccount) {
+        return res.status(400).json({
+            message: "Cannot transfer funds to the same account"
+        })
+    }
+
+    const senderAccount = await accountModel.findOne({ _id: fromAccount, user: req.user._id })
     const receiverAccount = await accountModel.findOne({ _id: toAccount })
 
     if (!senderAccount || !receiverAccount) {
         return res.status(400).json({
-            message: "Invalid fromAccount or toAccount"
+            message: "Invalid fromAccount or toAccount, or you do not own the fromAccount"
         })
     }
 
-    // 2. Validate idempotency key
+    // Check idempotency key
     const existingTransaction = await transactionModel.findOne({
         idempotencyKey
     })
@@ -44,14 +50,14 @@ async function createTransaction(req, res) {
         }
 
         if (existingTransaction.status === "FAILED") {
-            return res.status(500).json({
-                message: "Transaction processing failed, please retry"
+            return res.status(400).json({
+                message: "Transaction processing failed. Please retry using a new idempotencyKey."
             })
         }
 
         if (existingTransaction.status === "REVERSED") {
-            return res.status(500).json({
-                message: "Transaction was reversed, please retry"
+            return res.status(400).json({
+                message: "Transaction was reversed. Please retry using a new idempotencyKey."
             })
         }
     }
@@ -62,12 +68,31 @@ async function createTransaction(req, res) {
     let transaction
 
     try {
-        // 3. Acquire a write lock on the sender account by updating a timestamp to prevent race conditions
-        const senderAccountLocked = await accountModel.findOneAndUpdate(
-            { _id: fromAccount, status: "ACTIVE" },
-            { $set: { updatedAt: new Date() } },
-            { session, new: true }
-        )
+        let senderAccountLocked
+        let receiverAccountLocked
+
+        // Prevent transaction deadlocks
+        if (fromAccount < toAccount) {
+            senderAccountLocked = await accountModel.findOneAndUpdate(
+                { _id: fromAccount, status: "ACTIVE" },
+                { $set: { updatedAt: new Date() } },
+                { session, new: true }
+            )
+            receiverAccountLocked = await accountModel.findOne({
+                _id: toAccount,
+                status: "ACTIVE"
+            }).session(session)
+        } else {
+            receiverAccountLocked = await accountModel.findOne({
+                _id: toAccount,
+                status: "ACTIVE"
+            }).session(session)
+            senderAccountLocked = await accountModel.findOneAndUpdate(
+                { _id: fromAccount, status: "ACTIVE" },
+                { $set: { updatedAt: new Date() } },
+                { session, new: true }
+            )
+        }
 
         if (!senderAccountLocked) {
             await session.abortTransaction()
@@ -77,12 +102,6 @@ async function createTransaction(req, res) {
             })
         }
 
-        // Verify receiver account is ACTIVE under the session
-        const receiverAccountLocked = await accountModel.findOne({
-            _id: toAccount,
-            status: "ACTIVE"
-        }).session(session)
-
         if (!receiverAccountLocked) {
             await session.abortTransaction()
             session.endSession()
@@ -91,7 +110,7 @@ async function createTransaction(req, res) {
             })
         }
 
-        // 4. Derive sender balance from ledger under the transaction session
+        // Derive sender balance
         const currentBalance = await senderAccountLocked.getBalance(session)
 
         if (currentBalance < amount) {
@@ -102,7 +121,7 @@ async function createTransaction(req, res) {
             })
         }
 
-        // 5. Create transaction (PENDING)
+        // Create pending transaction
         transaction = (
             await transactionModel.create([{
                 fromAccount,
@@ -113,7 +132,7 @@ async function createTransaction(req, res) {
             }], { session })
         )[0]
 
-        // 6. Create DEBIT ledger entry
+        // Create debit entry
         await ledgerModel.create([{
             account: fromAccount,
             amount,
@@ -121,7 +140,7 @@ async function createTransaction(req, res) {
             type: "DEBIT"
         }], { session })
 
-        // 7. Create CREDIT ledger entry
+        // Create credit entry
         await ledgerModel.create([{
             account: toAccount,
             amount,
@@ -129,14 +148,14 @@ async function createTransaction(req, res) {
             type: "CREDIT"
         }], { session })
 
-        // 8. Mark transaction COMPLETED
+        // Mark transaction completed
         transaction = await transactionModel.findOneAndUpdate(
             { _id: transaction._id },
             { status: "COMPLETED" },
             { session, new: true }
         )
 
-        // 9. Commit MongoDB session
+        // Commit database transaction
         await session.commitTransaction()
         session.endSession()
     } catch (error) {
@@ -145,7 +164,7 @@ async function createTransaction(req, res) {
         }
         session.endSession()
 
-        // Create or update transaction record to FAILED state outside the transaction session
+        // Record transaction failure
         let failedTransaction
         try {
             if (transaction && transaction._id) {
@@ -167,7 +186,7 @@ async function createTransaction(req, res) {
             console.error("Failed to save failed transaction state:", dbError)
         }
 
-        // Send email notification of failure
+        // Email failure notification
         try {
             await emailService.sendTransactionFailureEmail(
                 req.user.email,
@@ -185,7 +204,7 @@ async function createTransaction(req, res) {
         })
     }
 
-    // 10. Send email notification
+    // Email success notification
     try {
         await emailService.sendTransactionEmail(
             req.user.email,
@@ -220,9 +239,7 @@ async function createInitialFundsTransaction(req, res) {
         })
     }
 
-    const existingTransaction = await transactionModel.findOne({
-        idempotencyKey
-    })
+    const existingTransaction = await transactionModel.findOne({ idempotencyKey })
 
     if (existingTransaction) {
         if (existingTransaction.status === "COMPLETED") {
@@ -237,29 +254,30 @@ async function createInitialFundsTransaction(req, res) {
     session.startTransaction()
 
     try {
-        let systemAccount = await accountModel.findOne({
-            user: req.user._id
-        }).session(session)
+        // Find reserve account
+        let reserveAccount = await accountModel.findOne({ systemReserve: true }).select("+systemReserve").session(session)
 
-        // Automatically create system account if it doesn't exist yet
-        if (!systemAccount) {
-            systemAccount = (await accountModel.create([{
+        if (!reserveAccount) {
+            // Initialize reserve account
+            reserveAccount = (await accountModel.create([{
                 user: req.user._id,
                 currency: "INR",
-                status: "ACTIVE"
+                status: "ACTIVE",
+                systemReserve: true
             }], { session }))[0]
         }
 
-        const transaction = new transactionModel({
-            fromAccount: systemAccount._id,
+        // Create transaction document
+        const [transaction] = await transactionModel.create([{
+            fromAccount: reserveAccount._id,
             toAccount,
             amount,
             idempotencyKey,
             status: "PENDING"
-        })
+        }], { session })
 
         await ledgerModel.create([{
-            account: systemAccount._id,
+            account: reserveAccount._id,
             amount,
             transaction: transaction._id,
             type: "DEBIT"
@@ -272,15 +290,18 @@ async function createInitialFundsTransaction(req, res) {
             type: "CREDIT"
         }], { session })
 
-        transaction.status = "COMPLETED"
-        await transaction.save({ session })
+        const completedTransaction = await transactionModel.findOneAndUpdate(
+            { _id: transaction._id },
+            { status: "COMPLETED" },
+            { session, returnDocument: "after" }
+        )
 
         await session.commitTransaction()
         session.endSession()
 
         return res.status(201).json({
             message: "Initial funds transaction completed successfully",
-            transaction
+            transaction: completedTransaction
         })
     } catch (error) {
         if (session.inTransaction()) {
