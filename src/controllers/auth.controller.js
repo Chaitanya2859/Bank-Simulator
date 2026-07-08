@@ -97,11 +97,13 @@ async function userLogoutController(req, res) {
     }
 
     // Save to blacklist
-    try {
-        await redisClient.setEx(`blacklist:${authToken}`, 3 * 24 * 60 * 60, "true")
-        redisSuccess = true
-    } catch (err) {
-        console.error("Redis write failure:", err)
+    if (redisClient) {
+        try {
+            await redisClient.setEx(`blacklist:${authToken}`, 3 * 24 * 60 * 60, "true")
+            redisSuccess = true
+        } catch (err) {
+            console.error("Redis write failure:", err)
+        }
     }
 
     // Check complete failure

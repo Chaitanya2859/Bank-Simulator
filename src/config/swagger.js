@@ -10,6 +10,10 @@ const options = {
         },
         servers: [
             {
+                url: "https://bank-simulator-hezp.onrender.com",
+                description: "Production live server"
+            },
+            {
                 url: "http://localhost:4000",
                 description: "Local development server"
             }

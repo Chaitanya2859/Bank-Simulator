@@ -15,12 +15,12 @@ jest.mock("../src/services/email.service.js", () => ({
     sendTransactionFailureEmail: jest.fn().mockResolvedValue(true)
 }))
 
-// Mock Redis in-memory storage for tests
-const mockRedisStore = new Map()
+// Mock Redis storage
+global.mockRedisStore = global.mockRedisStore || new Map()
 jest.mock("../src/config/redis.js", () => ({
-    get: jest.fn().mockImplementation(async (key) => mockRedisStore.get(key) || null),
+    get: jest.fn().mockImplementation(async (key) => global.mockRedisStore.get(key) || null),
     setEx: jest.fn().mockImplementation(async (key, ttl, value) => {
-        mockRedisStore.set(key, value)
+        global.mockRedisStore.set(key, value)
         return "OK"
     }),
     connect: jest.fn().mockResolvedValue(true)
@@ -40,7 +40,7 @@ beforeAll(async () => {
 
 beforeEach(async () => {
     await tokenBlackListModel.deleteMany({})
-    mockRedisStore.clear()
+    global.mockRedisStore.clear()
 })
 
 afterAll(async () => {

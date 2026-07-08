@@ -1,21 +1,25 @@
 const { createClient } = require("redis")
 
-const redisUrl = process.env.REDIS_URL || "redis://localhost:6379"
-const client = createClient({ url: redisUrl })
+const redisUrl = process.env.REDIS_URL
+let client = null
 
-client.on("error", (err) => {
-    console.error("Redis connection error:", err)
-})
+if (redisUrl) {
+    client = createClient({ url: redisUrl })
 
-client.on("connect", () => {
-    console.log("Redis connected successfully")
-})
-
-// Automatically connect client
-if (process.env.NODE_ENV !== "test") {
-    client.connect().catch((err) => {
-        console.error("Redis initial error:", err)
+    client.on("error", (err) => {
+        console.error("Redis connection error:", err)
     })
+
+    client.on("connect", () => {
+        console.log("Redis connected successfully")
+    })
+
+    // Establish Redis connection
+    if (process.env.NODE_ENV !== "test") {
+        client.connect().catch((err) => {
+            console.error("Redis initial error:", err)
+        })
+    }
 }
 
 module.exports = client

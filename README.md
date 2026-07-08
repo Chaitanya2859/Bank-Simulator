@@ -159,14 +159,27 @@ docker-compose up --build
 
 App will be available at [http://localhost:4000](http://localhost:4000).
 
-### Option 2: Running Locally
-Requires your own MongoDB replica set and Redis instance already running.
+### Option 2: Running Locally (Bypassing Docker)
+If you want to skip Docker entirely, you can run the server locally. To do this, you do not need to install MongoDB or Redis locally on your machine:
 
-```bash
-npm install
-cp .env.example .env
-npm run dev
-```
+1. **Install Dependencies:**
+   ```bash
+   npm install
+   ```
+2. **Setup your environment file:**
+   ```bash
+   cp .env.example .env
+   ```
+3. **Configure MongoDB Atlas:**
+   * Since transactions require a MongoDB Replica Set, use **MongoDB Atlas** (which runs as a replica set by default).
+   * Put your Atlas URI string in `.env` as the `MONGO_URI`.
+4. **Skip Redis setup (Optional):**
+   * The auth middleware is designed to fall back gracefully to MongoDB if Redis is offline. 
+   * You can leave the `REDIS_URL` blank or commented out in your `.env` file, and the application will still run perfectly.
+5. **Start the server:**
+   ```bash
+   npm run dev
+   ```
 
 ---
 
@@ -192,7 +205,8 @@ Fill these in against your own `.env.example` — adjust names/values to match y
 
 Full interactive OpenAPI/Swagger docs are mounted at:
 
-**[http://localhost:4000/api/docs](http://localhost:4000/api/docs)**
+* **Production Live Docs:** [https://bank-simulator-hezp.onrender.com/api/docs](https://bank-simulator-hezp.onrender.com/api/docs)
+* **Local development:** [http://localhost:4000/api/docs](http://localhost:4000/api/docs)
 
 Recruiters or reviewers can authenticate and run live request simulations against every endpoint directly from the browser — no Postman collection needed.
 

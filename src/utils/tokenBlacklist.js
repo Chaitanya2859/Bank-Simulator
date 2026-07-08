@@ -3,6 +3,11 @@ const tokenBlackListModel = require("../models/blackList.model")
 
 async function isTokenBlacklisted(token) {
     try {
+        if (!redisClient) {
+            // Fallback to Mongo
+            const mongoHit = await tokenBlackListModel.findOne({ token }).lean()
+            return !!mongoHit
+        }
         const cached = await redisClient.get(`blacklist:${token}`)
         if (cached === "true") {
             return true

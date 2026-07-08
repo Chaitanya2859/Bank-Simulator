@@ -12,12 +12,12 @@ jest.mock("../src/services/email.service.js", () => ({
     sendTransactionFailureEmail: jest.fn().mockResolvedValue(true)
 }))
 
-// Mock Redis in-memory storage for tests
-const mockRedisStore = new Map()
+// Mock Redis storage
+global.mockRedisStore = global.mockRedisStore || new Map()
 jest.mock("../src/config/redis.js", () => ({
-    get: jest.fn().mockImplementation(async (key) => mockRedisStore.get(key) || null),
+    get: jest.fn().mockImplementation(async (key) => global.mockRedisStore.get(key) || null),
     setEx: jest.fn().mockImplementation(async (key, ttl, value) => {
-        mockRedisStore.set(key, value)
+        global.mockRedisStore.set(key, value)
         return "OK"
     }),
     connect: jest.fn().mockResolvedValue(true)
@@ -43,7 +43,7 @@ afterAll(async () => {
 beforeEach(async () => {
     await userModel.deleteMany({})
     await tokenBlackListModel.deleteMany({})
-    mockRedisStore.clear()
+    global.mockRedisStore.clear()
 })
 
 describe("Authentication API Integration Tests", () => {
@@ -133,6 +133,9 @@ describe("Authentication API Integration Tests", () => {
         })
         const token = parseCookieToken(loginRes)
 
+        // Mute console errors
+        const consoleSpy = jest.spyOn(console, "error").mockImplementation(() => {})
+
         redisClient.setEx.mockRejectedValueOnce(new Error("Redis write failure"))
         await request(app)
             .post("/api/auth/logout")
@@ -144,6 +147,9 @@ describe("Authentication API Integration Tests", () => {
             .get("/api/accounts")
             .set("Authorization", `Bearer ${token}`)
             .send()
+
+        // Restore console errors
+        consoleSpy.mockRestore()
 
         expect(res.status).toBe(401)
     })
