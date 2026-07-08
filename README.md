@@ -210,5 +210,3 @@ Recruiters or reviewers can authenticate and run live request simulations agains
 ## Contributing
 
 Contributions, issues, and feature requests are welcome. Feel free to open an issue or submit a PR.
-
-## License
